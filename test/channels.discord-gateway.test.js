@@ -88,7 +88,7 @@ function okFetch(url) {
     A.eq(identify.d.token, 'BOT', 'IDENTIFY carries the bot token');
     A.eq(identify.d.intents, DEFAULT_INTENTS, 'IDENTIFY requests the default intents');
     A.ok((identify.d.intents & INTENT.MESSAGE_CONTENT) === 0, 'no privileged MESSAGE_CONTENT intent: DM text arrives without it, and a missing portal toggle no longer kills the bot (4014)');
-    A.ok((identify.d.intents & INTENT.GUILD_MESSAGES) === 0, 'no GUILD_MESSAGES: server channels are ignored by the DM-only adapter anyway');
+    A.ok((identify.d.intents & INTENT.GUILD_MESSAGES) !== 0, 'GUILD_MESSAGES is set: server channels reach the hub (non-privileged; content only when the bot is @mentioned)');
     A.ok((identify.d.intents & INTENT.DIRECT_MESSAGES) !== 0, 'DIRECT_MESSAGES intent is set');
     // READY
     ws.emit({ op: 0, t: 'READY', s: 1, d: { session_id: 'sess123', resume_gateway_url: 'wss://resume.test', user: { id: 'BOTID' } } });
