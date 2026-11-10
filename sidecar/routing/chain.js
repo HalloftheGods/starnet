@@ -32,7 +32,8 @@
 const Pipeline = require('../../frontend/app/pipeline.js');
 const { note: failNote } = require('../failopen.js');   // tagged fail-open: a swallowed ledger/barrier error stays visible
 const LineFire = require('./line-fire.js');   // the stop note's ONE wording (the routine paths fold a line the same way)
-const Verdict = require('./verdict.js');   // the VERDICT channel (pure parser + reviewer brief)
+const Verdict = require('./verdict.js');
+const ModelTier = require('./model-tier.js');   // the MODEL TIER channel (a cheap step sizes the next one's model)   // the VERDICT channel (pure parser + reviewer brief)
 
 // the DEFAULT ceilings — a line that sets no LINE BUDGET runs under exactly these. They are the one
 // normalizer's defaults (Pipeline.LINE_LIMIT_DEFAULTS) so the compiler and the executor can never disagree.
@@ -586,6 +587,8 @@ function makeChainRunner(o) {
     if (lineLimits && lineId) { try { fromPlan = lineLimits(lineId); } catch (_) { fromPlan = null; } }
     let pool = null; try { pool = poolCap(); } catch (_) { pool = null; }
     const lim = effectiveLimits(s.limits || fromPlan, { maxHops, maxUsd }, pool);
+    // MODEL TIER (2026-11-10): { key: the dock a stage named a tier for, tier } — that dock runs at the tier, loop-backs too
+    let routedTier = null;
     const out = { text: s.text, agentId: startAgent, hops: [], usd: 0, stopped: null, limits: { maxHops: lim.maxHops, maxUsd: lim.maxUsd, maxUsdPerDay: lim.maxUsdPerDay, clamped: lim.clamped } };
     /* THE PARTIAL JOB (runtime repair 2026-10-12): a JOINER that sends on without every branch — one failed, or never delivered
        before the timeout — marks the merged crate PARTIAL in its text (Pipeline.joinPayload) and the job on `out.partial` (why, in
@@ -735,6 +738,7 @@ function makeChainRunner(o) {
     }
     for (let hop = 1; hop <= 400; hop++) {
       if (s.signal && s.signal.aborted) { out.stopped = 'stopped'; return out; }
+      const lastStageText = out.text;   // the output of the stage that just ran (a loop gate may rewrite out.text below)
       // the tag is derived from the OUTPUT of the stage that just ran — this is what makes a FILTER downstream
       // of a dock a real branch on the result rather than a re-read of the original message.
       let target = null, step = null, loopHop = false, entryBranch = false, hopPart = null;
@@ -889,6 +893,10 @@ function makeChainRunner(o) {
         : hopPart ? Pipeline.partHandoff(originalText, hopPart.text, hopPart.i, hopPart.k, hop, briefOf(target))
         : hopTurn({ handoffText, stageBrief, loopGateAfter, lastStage, originalText, from: cur.agentId, upstream: out.text, hop, target: target.agentId, targetDock: target.dockId, lineId });
       const call = { agentId: target.agentId, text: turn, hop, from: entryBranch ? null : cur.agentId, signal: s.signal, workitemId };
+      // MODEL TIER: a stage that ended with `MODEL: haiku|sonnet|opus` sizes the step it hands to (never a loop's reviewer
+      // output — the work going back to the same dock keeps the tier its triage named)
+      if (!entryBranch && !loopHop) { const tier = ModelTier.parseModelTier(lastStageText); if (tier) routedTier = { key: nodeKey(target), tier }; }
+      if (routedTier && routedTier.key === nodeKey(target)) call.modelTier = routedTier.tier;
       // what is LEFT of the line's $ ceiling rides the hop as a lower-only cap: the pre-hop check alone let one own-key stage
       // spend far past the line's limit ("within one hop's spend" — QA 2026-10-02)
       call.ceilingUsd = Math.max(0, lim.maxUsd - spent);

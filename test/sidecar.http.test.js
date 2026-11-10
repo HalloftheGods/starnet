@@ -873,6 +873,14 @@ function boot(port, workspaces, attemptsLeft, extraEnv) {
     A.eq(dcStatus.body.ownerLocked, true, 'Discord owner lock survived restart');
     A.ok(JSON.stringify(dcStatus.body).indexOf('discord-owner-42') < 0, 'Discord status does not expose ownerId');
     A.ok(JSON.stringify(dcStatus.body).indexOf('discord-token') < 0, 'Discord status does not expose token');
+    // CHANNEL → LINE (2026-11-10): the binding route validates the line and the channel, and status reports it
+    A.eq(dcStatus.body.lineId, '', 'an unbound Discord reports no line');
+    const dcBad = await j('POST', '/api/channels/discord/line', { lineId: 'p_not_a_line' });
+    A.ok(dcBad.status === 400 && /is not armed yet/.test(dcBad.body.error), 'a line the plan does not hold is refused: ' + JSON.stringify(dcBad.body));
+    const slBad = await j('POST', '/api/channels/slack/line', { lineId: 'p1' });
+    A.ok(slBad.status === 400 && /only discord can start a line/.test(slBad.body.error), 'a channel that cannot bind yet says so: ' + JSON.stringify(slBad.body));
+    const dcOff = await j('POST', '/api/channels/discord/line', { lineId: null });
+    A.ok(dcOff.status === 200 && dcOff.body.ok === true && dcOff.body.lineId === null, 'unbinding is always allowed: ' + JSON.stringify(dcOff.body));
     const savedChannels = JSON.parse(fs.readFileSync(path.join(ws, 'channels', 'secrets.json'), 'utf8'));
     A.eq(savedChannels.discord.ownerId, 'discord-owner-42', 'Discord auto-start preserved saved ownerId on disk');
 

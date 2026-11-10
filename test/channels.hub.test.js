@@ -123,6 +123,20 @@ async function run() {
     A.ok(runs.every(r => !/=>/.test(r.system.slice(0, 20))), 'no run is handed function source as its persona');
   }
 
+  // ---- B3. a message the floor routes to ANOTHER agent runs in that agent's own prompt (systemFor, 2026-11-10) ----
+  // A Discord channel bound to a line whose first step is RESERVE OPS: the saved system is X's; RESERVE OPS must not wear it.
+  {
+    const runs = [];
+    const runOnce = async (o) => { runs.push(o); o.emit('agent.run.start', { agentId: o.agentId, runId: o.runId }); o.emit('agent.token', { agentId: o.agentId, runId: o.runId, delta: 'ok' }); o.emit('agent.run.end', { agentId: o.agentId, runId: o.runId, reason: 'done' }); };
+    const base = { runOnce, send: () => Promise.resolve({ ok: true }), secrets: () => ({ key: 'k', model: 'm', agentId: 'agent', system: 'You are X.' }), classify: () => false };
+    await makeChannelHub(Object.assign({}, base, { store: fakeStore(), newId: idGen(), resolveAgent: () => 'ops', systemFor: id => id === 'ops' ? 'You are OPS.' : '' })).onInbound(dm('hello'));
+    A.ok(runs[0].agentId === 'ops' && runs[0].system.indexOf('You are OPS.') === 0, 'the routed agent runs as itself: ' + JSON.stringify(runs[0].system.slice(0, 30)));
+    await makeChannelHub(Object.assign({}, base, { store: fakeStore(), newId: idGen(), resolveAgent: () => 'agent', systemFor: () => 'WRONG' })).onInbound(dm('hello'));
+    A.ok(runs[1].system.indexOf('You are X.') === 0, 'the configured agent keeps its saved prompt');
+    await makeChannelHub(Object.assign({}, base, { store: fakeStore(), newId: idGen(), resolveAgent: () => 'ops' })).onInbound(dm('hello'));
+    A.ok(runs[2].system.indexOf('You are X.') === 0, 'no systemFor seam: the old behaviour exactly');
+  }
+
   // ---- B3. Codex OAuth config: no API key is required, but provider must reach runOnce ----
   {
     const store = fakeStore(); let lastRun = null; const sends = [];

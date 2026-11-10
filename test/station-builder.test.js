@@ -2198,6 +2198,13 @@ for (const c of T.catalog) {
     A.ok(/^REFUSED: Say one start/.test((await sl.run({ line: 'ship it', schedule: 'daily', webhook: true, job: 'x' }, {})).content) && /^REFUSED: job is the work the line gets/.test((await sl.run({ line: 'ship it', schedule: 'daily' }, {})).content), 'one start a call, each with its job');
     startAnswer = { ok: true, kind: 'off', id: 'trg_x1', was: 'webhook' };
     A.ok(/"said":"The webhook trigger trg_x1 on SHIP IT is off\."/.test((await sl.run({ line: 'ship it', off: 'trg_x1' }, {})).content), 'a trigger turns off');
+    // CHANNEL → LINE (2026-11-10): a channel start needs no job (the message is the job) and names the channel
+    startAnswer = { ok: true, kind: 'channel', id: 'discord', channel: 'discord', was: null, connected: true };
+    const ch = await sl.run({ line: 'ship it', channel: 'discord' }, {});
+    A.ok(starts[starts.length - 1].kind === 'channel' && starts[starts.length - 1].channel === 'discord' && starts[starts.length - 1].lineId === 'p12', 'a channel start goes to the core for that line');
+    A.ok(/Every discord message now enters SHIP IT at its INBOX/.test(ch.content) && ch.summary === 'SHIP IT starts from discord messages', 'and says what a message now does: ' + ch.content.slice(0, 200));
+    startAnswer = { ok: true, kind: 'off', id: 'discord', was: 'channel' };
+    A.ok(/discord no longer starts SHIP IT/.test((await sl.run({ line: 'ship it', off: 'discord' }, {})).content), 'a channel start turns off');
     const idx2 = readSidecarSource();
     A.ok(/if \(!job\) return \{ ok: false, error: 'a start needs the job it sends down the line each time' \};\n[\s\S]{0,260}\{ const scan = cronGuard\.scanRoutinePrompt\(job\); if \(!scan\.ok\) return \{ ok: false, error: scan\.error \}; \}\n  if \(s\.kind === 'schedule'\)/.test(idx2), 'every start (folder and webhook too) meets the routine tripwire before anything is saved');
     A.ok(/startLine: spec => startLineFor\(spec\)/.test(idx2) && /async function startLineFor\(spec\)/.test(idx2) && /createCronJobFromSpec\(\{ name: \(name \? name \+ ' — ' : ''\)/.test(idx2) && /extra\.secretHash = mintTriggerSecret\(\)\.hash;   \/\/ the key itself is never kept or handed on/.test(idx2), 'the tool runs the panel\'s own schedule and trigger cores, and drops a webhook key');

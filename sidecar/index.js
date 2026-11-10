@@ -488,6 +488,7 @@ const { makeSubagentManager } = require('./subagents.js');          // durable b
 const { makeRealtimeVoice } = require('./realtime-voice.js');       // browser WebRTC voice coordinator; API key never leaves this process
 const { makeStationBridge } = require('./station-bridge.js');   // page-side command channel for station tools
 const { makeNativeStt } = require('./native-stt.js');                // keyless Windows dictation fallback for OAuth Live voice
+const ModelTier = require('./routing/model-tier.js');   // MODEL TIER: a cheap step names the next step's model (haiku/sonnet/opus)
 const Classify = require('../frontend/app/classify.js');   // the SAME task-vs-talk classifier the browser uses
 const Pipeline = require('../frontend/app/pipeline.js');   // the ONE routing-plan compiler/resolver (router.js loads the same module) — used here for a side-effect-free dispatch peek
 const sharedSpecialties = require('../shared/specialties.js');   // Class Loadouts S1: the ONE class catalog — no hardcoded class prose here
@@ -7396,7 +7397,7 @@ const cronDriver = makeCronDriver({
       runsMeta.set(hopRunId, { agentId: String(h.agentId || 'agent'), startedAt: Date.now(), source: 'cron' });
       try {
         await runOnce({
-          key: hopConfig.key, model: hopConfig.model, provider: hopConfig.provider,
+          key: hopConfig.key, model: (h.modelTier && hopConfig.model && ModelTier.applyTier(String(hopConfig.model), h.modelTier)) || hopConfig.model, provider: hopConfig.provider,   // MODEL TIER: the step before sized this hop
           baseUrl: hopConfig.baseUrl || '', reasoningEffort: hopConfig.reasoningEffort,
           system: cronSystemFor(h.agentId), stationEvidence: true,   // the persona's observed half rides the run context (dossierWithGoals)
           messages: [{ role: 'user', content: h.text }], agentId: h.agentId, isTask: true,   // lineId: ONE key below (the chain's own h.lineId)
@@ -11187,7 +11188,8 @@ function startDiscord(token, key, model, agentCfg) {
     token: token, key: key, model: model, provider: provider, baseUrl: cfg.baseUrl || cfg.base_url || '', reasoningEffort: reasoningEffort, enabled: true,
     agentId: cfg.agentId || undefined, system: cfg.system || undefined, name: cfg.name || undefined,
     ownerId: cfg.ownerId || prev.ownerId || undefined,
-    channelIds: discordChannelIds.length ? discordChannelIds : undefined
+    channelIds: discordChannelIds.length ? discordChannelIds : undefined,
+    lineId: cfg.lineId || prev.lineId || undefined   // CHANNEL → LINE binding (setChannelLine) survives a reconnect
   } });
   const secretsPersisted = saveChannelSecrets(channelSecrets);   // read-back-proven; surfaced by the connect route
   // Operator-listed server channels are pre-admitted like an owner /allow (and become channel.send targets).
@@ -11204,8 +11206,15 @@ function startDiscord(token, key, model, agentCfg) {
         return { key: k, model: d.model, provider, baseUrl, configured: providerHasCredential(provider, k, baseUrl), error: expiredSignInNote(provider), reasoningEffort: resolveReasoningEffort(provider, d.reasoningEffort), agentId: d.agentId, system: d.system };
       },
       persona: DISCORD_PERSONA, classify: Classify.isTaskDirective, redact: redact, emit: chanEmit,
+      // a message routed to another agent (a line-bound channel) runs as THAT agent, never in the configured one's prompt
+      systemFor: (agentId) => (agentRoster.has(String(agentId || '')) ? cronSystemFor(String(agentId)) : ''),
+      // every downstream dock runs on ITS OWN roster provider/model/credential (the Telegram bot seam's rule) — without it
+      // a Discord line's later steps had no model of their own; and on a LINE-BOUND channel the first step does too
+      // (the triage bay's cheap model, not the model the bot was configured with). Unbound = the saved config, exactly.
+      resolveRunConfig: channelRunConfigFor,
+      resolveEntryRunConfig: (agentId) => discordEntryRunConfig(agentId),
       newId: () => crypto.randomUUID(), now: () => Date.now(),
-      resolveAgent: (ctx) => router.resolveDock(ctx),   // { agentId, dockId }: the hub runs AT the dock the floor routed to (multi-bay)
+      resolveAgent: (ctx) => resolveChannelDock('discord', ctx),   // { agentId, dockId }: the bound line's front door, else the floor's own routing
       chain: chainRunner,
       lineOriginFor: (agentId, dockId) => router.lineOriginFor(agentId, dockId),   // work belongs to a line: which line does work ARRIVING at this dock belong to? (null = a direct order)
       getTag: (text) => (Classify.getTag ? Classify.getTag(text) : undefined),
@@ -12413,6 +12422,7 @@ const ROUTES = [
   { m: 'POST', exact: '/api/channels/discord/sync', h: handleDiscordSync },
   { m: 'POST', exact: '/api/channels/discord/disconnect', h: handleDiscordDisconnect },
   { m: 'GET', exact: '/api/channels/discord/status', h: handleDiscordStatus },
+  { m: 'POST', rx: /^\/api\/channels\/([a-z]+)\/line$/, h: handleChannelLine },   // CHANNEL → LINE binding
   { m: 'POST', exact: '/api/channels/notify', h: handleChannelNotify },
   // DEV-ONLY (404s unless SKYNET_DEV): inject an inbound message through the real channel hub — floor
   // routing / classifier / crate telemetry testable without a live bot token. Own errorPolicy → always JSON.
@@ -13864,16 +13874,85 @@ function mintTriggerSecret() { const secret = LineTriggers.mintSecret(crypto.ran
    (createCronJobFromSpec + arm on create; LineTriggers.validateInput, the folder jail + baseline, triggerRunner.create),
    so the same refusals, the same tripwire on the job's words, the same records. A webhook's key is never handed to the
    model: the Commander takes a new one from the line's Workflow panel. */
+/* CHANNEL → LINE (2026-11-10): a channel may be bound to ONE workflow line. Every message on it then enters that
+   line's own INBOX (router.resolveDock with ctx.lineId — the same line-scoped walk a job sent down a line takes), so
+   the line runs from its first step whoever the bot "answers as". The binding is the `lineId` on the channel's saved
+   record; the UI's identity push (/sync) never touches it, so focusing another session no longer reroutes Discord.
+   A line that no longer exists, or has no INBOX, falls back to the floor's ordinary routing (work never stalls). */
+const CHANNEL_LINE_KINDS = ['discord'];
+function planHasLine(lineId) {
+  const plan = router.getPlan();
+  return !!(plan && (Array.isArray(plan.lines) ? plan.lines : []).some(l => l && String(l.lineId) === String(lineId)));
+}
+function channelLineOf(channel) {
+  const rec = (channelSecrets && channelSecrets[channel]) || null;
+  const id = rec && rec.lineId ? String(rec.lineId) : '';
+  return id || null;
+}
+function resolveChannelDock(channel, ctx) {
+  const lineId = channelLineOf(channel);
+  if (lineId && planHasLine(lineId)) {
+    const r = router.resolveDock(Object.assign({}, ctx || {}, { lineId }));
+    if (r) return r;
+  }
+  return router.resolveDock(ctx);
+}
+function discordSecretsView() {
+  const d = (channelSecrets && channelSecrets.discord) || {};
+  const provider = normalizeProvider(d.provider);
+  const k = providerRuntimeKey(provider, d.key || '');
+  const baseUrl = providerRuntimeBaseUrl(provider, d.baseUrl || d.base_url || '');
+  return { key: k, model: d.model, provider, baseUrl, configured: providerHasCredential(provider, k, baseUrl), error: expiredSignInNote(provider), reasoningEffort: resolveReasoningEffort(provider, d.reasoningEffort), agentId: d.agentId, system: d.system };
+}
+function discordEntryRunConfig(agentId) {
+  const sec = discordSecretsView();
+  if (!channelLineOf('discord') || !agentId || String(agentId) === String(sec.agentId || '')) return sec;
+  const c = channelRunConfigFor(agentId);
+  if (!c || c.ok === false) return c;
+  return Object.assign({}, c, { configured: true, agentId: String(agentId), system: cronSystemFor(String(agentId)) || c.system || '' });
+}
+function setChannelLine(channel, lineId) {
+  const ch = String(channel || '').toLowerCase().trim();
+  if (!CHANNEL_LINE_KINDS.includes(ch)) return { ok: false, error: 'only ' + CHANNEL_LINE_KINDS.join(', ') + ' can start a line so far (' + (ch || 'no channel') + ' was asked)' };
+  const rec = (channelSecrets && channelSecrets[ch]) || null;
+  if (!rec || !channelToken(ch, '', rec)) return { ok: false, error: 'connect ' + ch + ' first (CONNECT › CHANNELS)' };
+  const want = lineId == null ? '' : String(lineId).trim();
+  if (want && !planHasLine(want)) return { ok: false, error: 'the line ' + want.slice(0, 40) + ' is not armed yet (the station page compiles it as it is built): keep the page open and try again in a moment' };
+  const was = rec.lineId ? String(rec.lineId) : '';
+  const next = Object.assign({}, rec);
+  if (want) next.lineId = want; else delete next.lineId;
+  channelSecrets = Object.assign({}, channelSecrets, { [ch]: next });
+  if (!saveChannelSecrets(channelSecrets)) return { ok: false, error: 'the binding could not be saved to disk' };
+  return { ok: true, channel: ch, lineId: want || null, was: was || null, connected: ch === 'discord' ? !!discordStatus.connected : false };
+}
+// POST /api/channels/:ch/line { lineId } — bind (or, with an empty/null lineId, unbind) a channel to a workflow line.
+async function handleChannelLine(req, res, gm) {
+  const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
+  let body; try { body = JSON.parse(await readBody(req, 4096)) || {}; } catch (e) { return json(400, { ok: false, error: 'bad json' }); }
+  const r = setChannelLine(gm && gm[1], body.lineId);
+  json(r.ok ? 200 : 400, r);
+}
+
 async function startLineFor(spec) {
   const s = spec || {}, lineId = String(s.lineId || ''), job = String(s.job || '').trim(), name = String(s.name || '').replace(/\s+/g, ' ').trim().slice(0, 60);
   const plan = router.getPlan();
   if (!plan || !(Array.isArray(plan.lines) ? plan.lines : []).some(l => l && String(l.lineId) === lineId))
     return { ok: false, error: 'the line ' + (name || lineId) + ' is not armed yet (the station page compiles it as it is built): keep the page open and try again in a moment' };
+  if (s.kind === 'off' && CHANNEL_LINE_KINDS.includes(String(s.id || '').toLowerCase())) {
+    const ch = String(s.id).toLowerCase();
+    if (channelLineOf(ch) !== lineId) return { ok: false, error: ch + ' does not start ' + name + ' (nothing to turn off)' };
+    const r = setChannelLine(ch, null);
+    return r.ok ? { ok: true, kind: 'off', id: ch, was: 'channel' } : r;
+  }
   if (s.kind === 'off') {
     const cur = triggerRunner.get(String(s.id || ''));
     if (!cur || String(cur.lineId) !== lineId) return { ok: false, error: 'there is no trigger ' + String(s.id || '').slice(0, 40) + ' on ' + name + ' (a schedule is a routine: routine.manage pauses or removes it)' };
     const r = triggerRunner.update(cur.id, { enabled: false }, {});
     return r.ok ? { ok: true, kind: 'off', id: cur.id, was: cur.kind } : { ok: false, error: r.error };
+  }
+  if (s.kind === 'channel') {
+    const r = setChannelLine(s.channel, lineId);
+    return r.ok ? { ok: true, kind: 'channel', id: r.channel, channel: r.channel, was: r.was, connected: r.connected } : r;
   }
   if (!job) return { ok: false, error: 'a start needs the job it sends down the line each time' };
   // the routine tripwire, for EVERY start (a schedule meets it again in createCronJobFromSpec; a trigger's task is the same
@@ -17280,7 +17359,7 @@ async function handleCronRun(req, res) {
             runsMeta.set(hopRunId, { agentId: String(h.agentId || 'agent'), startedAt: Date.now(), source: 'cron' });
             try {
               await runOnce({
-                key: hopConfig.key, model: hopConfig.model, provider: hopConfig.provider,
+                key: hopConfig.key, model: (h.modelTier && hopConfig.model && ModelTier.applyTier(String(hopConfig.model), h.modelTier)) || hopConfig.model, provider: hopConfig.provider,   // MODEL TIER: the step before sized this hop
                 baseUrl: hopConfig.baseUrl || '', reasoningEffort: hopConfig.reasoningEffort,
                 system: cronSystemFor(h.agentId), stationEvidence: true,   // the persona's observed half rides the run context (dossierWithGoals)
                 messages: [{ role: 'user', content: h.text }], agentId: h.agentId, isTask: true,   // lineId: ONE key below (the chain's own h.lineId)
@@ -26849,7 +26928,7 @@ function handleDiscordStatus(req, res) {
   const durable = configured && (isChannelTokenDurable('discord') || !!d.token);   // keychain/env OR plaintext-on-disk (see telegram)
   res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   // `ownerLocked` proves a saved Discord owner survived restart without disclosing who that owner is.
-  res.end(JSON.stringify({ connected: discordStatus.connected, configured: configured, durable: durable, state: discordStatus.state, detail: discordStatus.detail || '', notifyAutonomous: !!(channelSecrets && channelSecrets.notifyAutonomous), ownerLocked: !!d.ownerId, channelIds: (d.channelIds || []).join(', ') }));
+  res.end(JSON.stringify({ connected: discordStatus.connected, configured: configured, durable: durable, state: discordStatus.state, detail: discordStatus.detail || '', notifyAutonomous: !!(channelSecrets && channelSecrets.notifyAutonomous), ownerLocked: !!d.ownerId, channelIds: (d.channelIds || []).join(', '), lineId: String(channelLineOf('discord') || '') }));
 }
 
 // POST /api/channels/notify { on } — the GLOBAL opt-in (default off): ping a connected channel when an AUTONOMOUS
@@ -26923,7 +27002,9 @@ function channelStatusPayload(id) {
     ownerPairingExpiresAt: ownerPairingStatus(rec).expiresAt,
     // the agent NAME the channel answers as (never a secret) — the panel renders "ANSWERS AS: <name>" so the
     // Commander can see which agent a DM will reach. Empty until a config is saved.
-    agentName: String(rec.name || '')
+    agentName: String(rec.name || ''),
+    // CHANNEL → LINE: the workflow line a message on this channel runs (its INBOX, from its first step), '' = none
+    lineId: CHANNEL_LINE_KINDS.includes(id) ? String(channelLineOf(id) || '') : ''
   };
   if (id === 'discord') out.channelIds = (Array.isArray(rec.channelIds) ? rec.channelIds : []).join(', ');
   // endpoint/account are NON-secret connection config (a homeserver URL / a signal-cli URL + number) — surfacing

@@ -127,6 +127,10 @@ const nameOf = a => String(a).toUpperCase();
   const rows = W.channelFeeds(status, ['nova'], [{ id: 'nova', name: 'NOVA' }, { id: 'quill', name: 'QUILL' }]);
   A.eq(rows.map(r => [r.label, r.feeds]), [['Telegram', true], ['Telegram @q_bot', false], ['Slack', null]],
     'a channel feeds the line only when it answers as an ENTRY dock; unknown stays unknown');
+  // a channel BOUND to a line feeds exactly that line, whoever it answers as (2026-11-10)
+  const bound = { discord: { configured: true, connected: true, agentName: 'Quill', lineId: 'p9' } };
+  A.eq(W.channelFeeds(bound, ['nova'], [{ id: 'nova', name: 'NOVA' }, { id: 'quill', name: 'QUILL' }], 'p9').map(r => [r.label, r.feeds, r.boundLine, r.bindable]), [['Discord', true, 'p9', true]], 'a bound channel feeds its own line');
+  A.eq(W.channelFeeds(Object.assign({}, bound, { discord: Object.assign({}, bound.discord, { agentName: 'Nova' }) }), ['nova'], [{ id: 'nova', name: 'NOVA' }], 'p1').map(r => r.feeds), [false], 'and no other line, even one whose first step it answers as');
   const jobs = [{ id: 'j1', agentId: 'nova', runsLine: true, enabled: true }, { id: 'j2', agentId: 'nova', enabled: true },
     { id: 'j3', agentId: 'quill', runsLine: true, enabled: true }, { id: 'j4', agentId: 'zed', runsLine: true }];
   const rt = W.lineRoutines(jobs, ['nova', 'quill'], ['nova']);

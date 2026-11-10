@@ -1066,7 +1066,11 @@ const WorkflowPanel = (() => {
       : tr.chanRows.map(r => '<div class="trg-row"><span class="trg-state' + (r.connected ? ' on' : '') + '">' + (r.connected ? '●' : '○') + '</span> <b>' + esc(r.label) + '</b>'
         + '<div class="trg-row-meta">' + (r.answersAs ? 'answers as ' + esc(String(r.answersAs).toUpperCase()) : 'no fixed agent') + ' · '
         + (r.feeds === true ? '<b class="wf-okc">a message runs this whole line</b>' : r.feeds === false ? 'not this line’s first step — a message runs only that agent' : 'the floor routes it')
-        + (r.connected ? '' : ' · <span class="trg-warn">not connected</span>') + '</div></div>').join('');
+        + (r.connected ? '' : ' · <span class="trg-warn">not connected</span>')
+        + (r.boundLine && r.feeds !== true ? ' · set to start another line' : '')
+        + (r.bindable && S.lineKey ? ' <button type="button" class="bb sm trg-chline" data-ch="' + esc(r.id) + '" data-on="' + (r.feeds === true && r.boundLine ? '0' : '1') + '">'
+          + (r.feeds === true && r.boundLine ? 'STOP STARTING THIS LINE' : 'START THIS LINE FROM ' + esc(r.label.split(' ')[0].toUpperCase())) + '</button>' : '')
+        + '</div></div>').join('');
     const feed = H.feedState(), feedPlan = H.plan() || {};
     const incoming = Object.values(feedPlan.sendTo || {}).filter(s => s.intakeId === p.id);
     // the sending line by the one line name (worldmodel.lineName) — never 'LINE p3', the raw key of a line whose BAY went down first
@@ -1162,6 +1166,16 @@ const WorkflowPanel = (() => {
     wireScheduleForm(p, docks, dockHint);
     if (S.lineKey) wireLineTriggers();
     $('#trg-chan').onclick = () => { H.sfx('click'); saveOpenFields(); H.openTerm('messaging'); };
+    // CHANNEL → LINE (2026-11-10): bind a connected channel so every message on it runs THIS line from its INBOX
+    for (const b of $$('.trg-chline')) b.onclick = () => {
+      const ch = b.getAttribute('data-ch'), on = b.getAttribute('data-on') === '1';
+      H.sfx('click'); saveOpenFields(); b.disabled = true;
+      api('/api/channels/' + encodeURIComponent(ch) + '/line', 'POST', { lineId: on ? S.lineKey : null }).then(r => {
+        if (r.status === 200 && r.j && r.j.ok) { H.sfx('chime'); S.trgMsg = { t: on ? 'every ' + ch + ' message now runs this line from its first step' : ch + ' no longer starts this line' }; }
+        else { H.sfx('bad'); S.trgMsg = { t: 'could not change ' + ch + (r.j && r.j.error ? ' — ' + r.j.error : ''), bad: true }; }
+        refreshServerFacts();
+      }).catch(() => { H.sfx('bad'); S.trgMsg = { t: 'sidecar unreachable — ' + ch + ' was not changed', bad: true }; paint(true); });
+    };
     $('#trg-auto').onclick = () => { H.sfx('click'); saveOpenFields(); H.openTerm('routines'); };
   }
   /* WORKING FOLDER (#25): the trusted project every stage of this line runs in. The value shown is the INBOX's own

@@ -71,6 +71,7 @@
   const STOP_WORDS_RE = /^\s*(?:stop|cancel|abort|halt|never\s*mind|nvm|forget\s+(?:it|that)|scratch\s+that)\s*[.!]*\s*$/i;
   // plain-English stop sentences shared with routines/loops (sidecar/stop-reason.js); the inline fallback only serves a
   // non-node embed, which never runs the hub against a real host.
+  const ModelTier = (typeof require === 'function') ? require('../routing/model-tier.js') : { applyTier: () => null };
   const StopReason = (typeof require === 'function') ? require('../stop-reason.js') : { stopSentence: (r) => (r ? 'it stopped before finishing (' + r + ')' : '') };
   /* WHY THE RUN STOPPED, in words (2026-10-11 — "they start a task and then stop repeatedly with no explanation"). A raw
      "(stopped: empty)" read as a silent stop, a provider-cut reply had no note at all (finishReason was ignored), a
@@ -443,6 +444,14 @@
     // or null. PROMPT TEXT ONLY — appended to the entry run's system context below; it never widens grants,
     // tools, or routing (those stay with resolveStation/resolveAgent). Chain hops get theirs inside chain.js.
     const stageBriefFor = typeof o.stageBriefFor === 'function' ? o.stageBriefFor : null;
+    /* systemFor(agentId) -> that roster agent's own composed prompt, or '' (optional, 2026-11-10). The channel's saved
+       `system` is the prompt of the agent it was configured to answer as; when the floor routes a message to ANOTHER
+       agent (a channel bound to a line whose first step is someone else), that agent must run as itself, not wearing
+       the configured agent's prompt. Absent seam = the exact old behaviour (sec.system wins whoever runs). */
+    const systemFor = typeof o.systemFor === 'function' ? o.systemFor : null;
+    // MODEL TIER (2026-11-10): a hop the chain sized (call.modelTier, from the step before) runs on that tier of its own
+    // model family; an id with no Claude family word, or no tier, keeps the agent's pinned model
+    const tieredModel = (model, tier) => { if (!tier || !model) return model; const t = ModelTier.applyTier(String(model), tier); return t || model; };
     // AGENTIC GRAPHS: the dock resolveAgent picked is stage ONE; the belts drawn PAST it say where its output
     // goes. `chain` is the injected executor (sidecar/routing/chain.js) already bound to the floor's edge
     // function — the hub hands it a way to run one hop and stays require-free. Absent -> a single-stage run,
@@ -2293,7 +2302,11 @@
       }
 
       const rec = store.getChatRecord ? store.getChatRecord(chatId) : null;
-      const persona = sec.system || personaFor(agentId, rec);   // the agent's REAL composed prompt when configured
+      // the agent's REAL composed prompt when configured — the configured agent's own, or (systemFor) the routed agent's
+      const ownSystem = !!sec.system && (!systemFor || !sec.agentId || String(sec.agentId) === String(agentId));
+      let routedSystem = '';
+      if (!ownSystem && systemFor) { try { routedSystem = String(systemFor(agentId) || ''); } catch (_) { routedSystem = ''; } }
+      const persona = ownSystem ? sec.system : (routedSystem || sec.system || personaFor(agentId, rec));
       // the dock's standing brief (step editor): when the router holds one for this agent's dock, the run's
       // system context carries it — the SAME section header the chain handoff turn uses. Null-safe: no seam /
       // no floor / no brief composes the exact pre-brief system string.
@@ -2535,7 +2548,7 @@
             try { store.appendTurn(hopKey, 'user', h.text); rememberHopKey(chatId, hopKey); } catch (e) { failNote('channels.hub.appendTurn', e); }
             try {
               await runOnce({
-                key: hopConfig.key, model: hopConfig.model, provider: hopConfig.provider,
+                key: hopConfig.key, model: tieredModel(hopConfig.model, h.modelTier), provider: hopConfig.provider,
                 baseUrl: hopConfig.baseUrl || hopConfig.base_url || '', reasoningEffort: hopConfig.reasoningEffort || hopConfig.reasoning_effort,
                 system: hopConfig.system || personaFor(h.agentId, rec), messages: hist.map(m => ({ role: m.role, content: m.content })).concat([{ role: 'user', content: h.text }]),
                 agentId: h.agentId, isTask: true, emit: hopSink, signal: h.signal, runId: hopRunId, trigger: 'event',

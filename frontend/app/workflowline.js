@@ -629,7 +629,9 @@
   const CHAN_LABEL = { telegram: 'Telegram', discord: 'Discord', slack: 'Slack', matrix: 'Matrix', signal: 'Signal' };
   // (a channel addresses an AGENT; on a multi-bay line it enters at that agent's ENTRY dock — the plan's
   //  entryDock — so "feeds this line" = the agent's entry dock is one of this line's entry docks)
-  function channelFeeds(status, entryAgentIds, agents) {
+  /* lineKey (2026-11-10): a channel BOUND to a line (its status carries lineId) feeds exactly that line, from its INBOX,
+     whoever it answers as; an unbound channel still feeds a line only when it answers as that line's first step. */
+  function channelFeeds(status, entryAgentIds, agents, lineKey) {
     const rows = [];
     if (!status || typeof status !== 'object') return rows;
     const entry = {}; for (const a of (entryAgentIds || [])) entry[a] = true;
@@ -639,8 +641,10 @@
       const label = CHAN_LABEL[id] || (id[0] ? id[0].toUpperCase() + id.slice(1) : id);
       if (s.configured) {
         const aid = s.agentName ? (byName[String(s.agentName).toLowerCase()] || null) : null;
-        rows.push({ id, label, connected: !!s.connected, answersAs: s.agentName || null, agentId: aid,
-          feeds: aid ? !!entry[aid] : null });
+        const bound = s.lineId ? String(s.lineId) : '';
+        rows.push({ id, label, connected: !!s.connected, answersAs: s.agentName || null, agentId: aid, boundLine: bound || null,
+          bindable: id === 'discord',   // the channels the sidecar can bind to a line (CHANNEL_LINE_KINDS)
+          feeds: bound ? (lineKey != null && bound === String(lineKey)) : aid ? !!entry[aid] : null });
       }
       for (const b of (Array.isArray(s.bots) ? s.bots : [])) {
         if (!b || !b.configured) continue;
@@ -726,11 +730,11 @@
       }
     }
     if (x.chans) {
-      out.chanRows = channelFeeds(x.chans, entryAgentsOf(flow), x.agents);
+      out.chanRows = channelFeeds(x.chans, entryAgentsOf(flow), x.agents, x.lineKey);
       for (const c of out.chanRows) {
         if (c.feeds !== true) continue;
         if (c.connected) { if (out.channels.indexOf(c.label.split(' ')[0]) < 0) out.channels.push(c.label.split(' ')[0]); }
-        else { out.paused.push('its ' + c.label + ' channel answers as its first step but is not connected'); out.held.push('when a ' + c.label.split(' ')[0] + ' message arrives (not connected)'); }
+        else { out.paused.push('its ' + c.label + ' channel ' + (c.boundLine ? 'is set to start it' : 'answers as its first step') + ' but is not connected'); out.held.push('when a ' + c.label.split(' ')[0] + ' message arrives (not connected)'); }
       }
     }
     return out;

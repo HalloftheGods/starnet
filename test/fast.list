@@ -888,6 +888,7 @@ test/first-ship-receipt.test.js
 test/finish-line-card-truth.test.js
 test/plan-poster.test.js
 test/chain.test.js
+test/model-tier.test.js
 test/chain.join-loop.test.js
 test/chain.limits.test.js
 test/hop-resume-seed.test.js
