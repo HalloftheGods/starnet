@@ -13892,7 +13892,11 @@ function channelLineOf(channel) {
 function resolveChannelDock(channel, ctx) {
   const lineId = channelLineOf(channel);
   if (lineId && planHasLine(lineId)) {
-    const r = router.resolveDock(Object.assign({}, ctx || {}, { lineId }));
+    // boundAgentId cleared: an ADDRESSED item skips the line scope (Pipeline.resolveDock answers the bound agent's
+    // entry dock first), so a chat remembered as answering as one agent bypassed the bound line and landed on whatever
+    // line that agent crews first (2026-11-10: Discord ran CHIEF at OPERATIONS · TRIAGE, a dock with no WORKBENCH, not
+    // the bound line's step 1). Same shape as the trigger hub's line-scoped resolve.
+    const r = router.resolveDock(Object.assign({}, ctx || {}, { lineId, boundAgentId: undefined }));
     if (r) return r;
   }
   return router.resolveDock(ctx);
