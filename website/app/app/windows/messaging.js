@@ -64,19 +64,25 @@
           '</div>' },
 
       { id: 'discord', title: 'DISCORD', pre: 'dc', accent: '#7c83f5',
-        // HONESTY: server/channel messages need a chat allowlist no production path supplies yet — DMs only today.
-        tagline: 'DM your Discord bot to talk to your agent. Server channels are not supported yet.',
+        // Server channels: the gateway subscribes to GUILD_MESSAGES; a channel stays closed until the owner sends /allow in it.
+        tagline: 'DM your Discord bot to talk to your agent, or @mention it in a server channel you have opened with /allow or listed under CHANNEL IDS.',
         verb: 'receiving',
         steps: [
           'Open the <b>Discord Developer Portal</b> → <b>New Application</b> → <b>Bot</b> → <b>Reset Token</b> → copy the token.',
           'Invite the bot to a server you are in (OAuth2 → URL Generator → tick <code>bot</code> → open the link). Discord only lets you DM a bot you share a server with. No intents need turning on.',
           'Paste the token below and connect.',
-          '<b>Pair your account.</b> Open a <b>direct message</b> with the bot (click it in the server member list → Message) and send the <code>pair</code> message StarNet shows, exactly as shown. Messages in server channels are ignored. Until you pair, the bot refuses every message.'
+          '<b>Pair your account.</b> Open a <b>direct message</b> with the bot (click it in the server member list → Message) and send the <code>pair</code> message StarNet shows, exactly as shown. Until you pair, the bot refuses every message.',
+          '<b>Optional: listen in a server channel.</b> Paste its <b>Channel ID</b> into CHANNEL IDS below (Discord → User Settings → Advanced → Developer Mode on, then right-click the channel → Copy Channel ID; comma-separate several). The bot must also have <b>View Channel</b> and <b>Send Messages</b> in that channel. Listed channels are open right away; you still pair first, and only your messages are obeyed. Without <b>Message Content Intent</b> the bot only sees messages that @mention it.',
+          '<b>Or open a channel by command.</b> In the channel, send <code>@YourBot /allow</code>. After that the bot answers messages there that @mention it. <code>@YourBot /deny</code> closes it again. (Bots only see channel text that mentions them unless you enable Message Content Intent in the portal.)'
         ],
         note: 'Your token is saved on this machine and never displayed.',
         fieldsHtml: '<label class="ch-lbl" for="dc-token">BOT TOKEN <span class="dim">— from the Discord Developer Portal</span></label>' +
-          '<input id="dc-token" type="password" class="key-input" placeholder="MTE...Bot token" autocomplete="off" spellcheck="false">',
-        read: (b) => ({ token: (b.querySelector('#dc-token').value || '').trim() }),
+          '<input id="dc-token" type="password" class="key-input" placeholder="MTE...Bot token" autocomplete="off" spellcheck="false">' +
+          '<label class="ch-lbl" for="dc-channel-ids">CHANNEL IDS <span class="dim">— optional, comma-separated server channel IDs the bot should listen in</span></label>' +
+          '<input id="dc-channel-ids" type="text" class="key-input" placeholder="1430342161744003132" autocomplete="off" spellcheck="false">' +
+          '<p class="ch-note">The bot needs View Channel and Send Messages there. Without Message Content Intent it only sees messages that @mention it.</p>',
+        read: (b) => ({ token: (b.querySelector('#dc-token').value || '').trim(), channelIds: (b.querySelector('#dc-channel-ids').value || '').trim() }),
+        prefill: (b, st) => { const e = b.querySelector('#dc-channel-ids'); if (e && !e.dataset.filled && st && typeof st.channelIds === 'string') { e.dataset.filled = '1'; if (!e.value) e.value = st.channelIds; } },   // once: later polls must not undo the user clearing the field
         clear: (b) => { b.querySelector('#dc-token').value = ''; },
         emptyMsg: 'paste your Discord bot token first',
         okMsg: '✓ connected — DM your bot on Discord',
@@ -565,6 +571,7 @@
           const payload = { token: bodyToken, key, model, provider, baseUrl, agentId: ident.agentId, system: ident.system, agentName: ident.agentName };
           if (vals.endpoint != null) payload.endpoint = vals.endpoint;
           if (vals.account != null) payload.account = vals.account;
+          if (vals.channelIds != null) payload.channelIds = vals.channelIds;
           const r = await Harness.api.post('/api/channels/' + c.id + '/connect', payload);
           const j = r.j || {};
           if (!r.ok || j.error) { delete pendingConnect[c.id]; setMsg(msgEl, '✕ ' + (j.error || ('HTTP ' + r.status)), ''); sfx('bad'); }
