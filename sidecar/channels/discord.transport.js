@@ -22,6 +22,8 @@
 
   const API = 'https://discord.com/api/v10';
   const DEFAULT_PARK_MS = 800;     // how long getUpdates parks when the buffer is empty before returning []
+  const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;   // Discord's default per-file upload limit
+  const MAX_CONTENT_LENGTH = 2000;             // message content limit (caption)
 
   function makeDiscordTransport(opts) {
     const o = opts || {};
@@ -82,6 +84,41 @@
         } catch (e) {
           if (e && (e.name === 'AbortError')) return { ok: false, error: 'aborted', retryable: false };
           return { ok: false, error: String((e && e.message) || e), retryable: true };   // network blip -> resend
+        }
+      },
+
+      // Upload ONE file (multipart/form-data: payload_json + files[0]). item = { buffer, filename?, mime?, caption? }.
+      // Never throws; same normalized SendResult shape as send().
+      async sendMedia(channelId, item, mediaOpts) {
+        const it = item || {};
+        const buf = it.buffer;
+        if (!buf || !buf.length) return { ok: false, error: 'no bytes to send', retryable: false };
+        if (buf.length > MAX_UPLOAD_BYTES) {
+          return { ok: false, error: 'file is too large for Discord (' + Math.round(buf.length / (1024 * 1024)) + 'MB > 25MB)', retryable: false };
+        }
+        try {
+          const filename = String(it.filename || 'file');
+          const form = new FormData();
+          const cap = it.caption == null ? '' : String(it.caption).slice(0, MAX_CONTENT_LENGTH);
+          form.append('payload_json', JSON.stringify({ content: cap, attachments: [{ id: 0, filename }] }));
+          form.append('files[0]', new Blob([buf], { type: String(it.mime || '') || 'application/octet-stream' }), filename);
+          const res = await fetchImpl(apiBase + '/channels/' + encodeURIComponent(String(channelId)) + '/messages', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bot ' + token },   // no Content-Type: fetch sets the multipart boundary
+            body: form,
+            signal: mediaOpts && mediaOpts.signal
+          });
+          if (res && res.ok) {
+            let id; try { const j = await res.json(); id = j && j.id; } catch (_) {}
+            return { ok: true, messageId: id != null ? String(id) : undefined };
+          }
+          const status = res ? res.status : 0;
+          let retryAfter; try { retryAfter = Number(res.headers && res.headers.get && res.headers.get('retry-after')) || undefined; } catch (_) {}
+          const retryable = status === 429 || (status >= 500 && status < 600);
+          return { ok: false, error: 'discord http ' + status, retryable, auth: status === 401, retryAfter };
+        } catch (e) {
+          if (e && (e.name === 'AbortError')) return { ok: false, error: 'aborted', retryable: false };
+          return { ok: false, error: String((e && e.message) || e), retryable: true };
         }
       }
     };
