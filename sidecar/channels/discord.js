@@ -29,6 +29,16 @@
     const author = m.author || {};
     if (author.bot) return { offset, message: null };          // never act on a bot/self message
     if (typeof m.content !== 'string' || !m.content) return { offset, message: null };   // non-text -> deliver nothing
+    // In a server channel the text usually starts with "<@botId> ". Strip leading mentions of BOTS so the hub sees
+    // "/allow" or the plain request; record bot mentions so the adapter's mention gate can see we were addressed.
+    const botMentions = (Array.isArray(m.mentions) ? m.mentions : []).filter(u => u && u.bot);
+    const botIds = new Set(botMentions.map(u => String(u.id)));
+    let text = m.content;
+    if (m.guild_id && botIds.size) {
+      let prev;
+      do { prev = text; text = text.replace(/^\s*<@!?(\d+)>\s*/, (all, id) => botIds.has(id) ? '' : all); } while (text !== prev);
+      if (!text.trim()) return { offset, message: null };
+    }
     return {
       offset,
       message: {
@@ -36,7 +46,8 @@
         chatType: m.guild_id ? 'group' : 'dm',                 // a DM has no guild
         userId: String(author.id),
         userName: author.global_name || author.username || String(author.id),
-        text: m.content,
+        text,
+        ...(botMentions.length ? { mentions: botMentions.map(u => String(u.username || '').toLowerCase()).filter(Boolean) } : {}),
         messageId: String(m.id)        // the adapter stamps ts from its injected clock
       }
     };

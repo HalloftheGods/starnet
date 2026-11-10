@@ -11,7 +11,7 @@
      2. Open the WS. Wait for op 10 HELLO -> heartbeat_interval.
      3. Heartbeat every interval (first beat jittered) with op 1 { d: last_seq }. Track ACKs (op 11); a missed
         ACK means a zombied connection -> reconnect.
-     4. IDENTIFY (op 2) with the token + intents (GUILDS | DIRECT_MESSAGES). The channel is DM-only, and Discord
+     4. IDENTIFY (op 2) with the token + intents (GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES). Discord
         delivers DM text WITHOUT the privileged MESSAGE_CONTENT intent, so we never ask for it: forgetting that
         portal toggle used to kill the connection (close 4014) for nothing (2026-10-11 user report).
      5. On READY (dispatch): record session_id, resume_gateway_url, and our own bot user id (to ignore self).
@@ -38,7 +38,10 @@
   const OP = { DISPATCH: 0, HEARTBEAT: 1, IDENTIFY: 2, RESUME: 6, RECONNECT: 7, INVALID_SESSION: 9, HELLO: 10, HEARTBEAT_ACK: 11 };
   // intents bitfield: GUILDS(1<<0) | GUILD_MESSAGES(1<<9) | MESSAGE_CONTENT(1<<15) | DIRECT_MESSAGES(1<<12)
   const INTENT = { GUILDS: 1 << 0, GUILD_MESSAGES: 1 << 9, DIRECT_MESSAGES: 1 << 12, MESSAGE_CONTENT: 1 << 15 };
-  const DEFAULT_INTENTS = INTENT.GUILDS | INTENT.DIRECT_MESSAGES;
+  // GUILD_MESSAGES (non-privileged) lets the bot see server-channel messages. Without the privileged
+  // MESSAGE_CONTENT intent Discord still fills `content` for messages that @mention the bot, which is exactly the
+  // mention gate we want: unmentioned chatter arrives empty and normalize() drops it.
+  const DEFAULT_INTENTS = INTENT.GUILDS | INTENT.GUILD_MESSAGES | INTENT.DIRECT_MESSAGES;
 
   const BACKOFF_BASE_MS = 1000;      // first reconnect delay
   const BACKOFF_MAX_MS = 30000;      // cap

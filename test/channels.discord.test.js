@@ -118,3 +118,18 @@ function resp(status, body, headers) {
 
   A.report('channels.discord.test');
 })().catch(e => { console.error(e); process.exit(1); });
+
+// ---- server-channel messages: leading bot mention stripped, mentions recorded ----
+(function serverChannelMentions() {
+  const bot = { id: '999', username: 'StarNet', bot: true };
+  const r = normalize({ id: '1', channel_id: 'C1', guild_id: 'G1', author: { id: 'u1', username: 'cmdr' }, content: '<@999> /allow', mentions: [bot] });
+  A.eq(r.message.text, '/allow', 'leading bot mention is stripped so /allow parses in a server channel');
+  A.eq(r.message.chatType, 'group', 'a guild message is a group');
+  A.ok(r.message.mentions.indexOf('starnet') !== -1, 'bot mention recorded for the mention gate');
+  const r2 = normalize({ id: '2', channel_id: 'C1', guild_id: 'G1', author: { id: 'u1' }, content: '<@!999>  hello', mentions: [bot] });
+  A.eq(r2.message.text, 'hello', 'nickname-form mention stripped too');
+  const r3 = normalize({ id: '3', channel_id: 'C1', guild_id: 'G1', author: { id: 'u1' }, content: '<@555> hi', mentions: [{ id: '555', bot: false }] });
+  A.eq(r3.message.text, '<@555> hi', 'a human mention is left alone');
+  const r4 = normalize({ id: '4', channel_id: 'C1', guild_id: 'G1', author: { id: 'u1' }, content: '<@999>', mentions: [bot] });
+  A.eq(r4.message, null, 'a bare mention with no text delivers nothing');
+})();

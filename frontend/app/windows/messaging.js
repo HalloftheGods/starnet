@@ -64,14 +64,15 @@
           '</div>' },
 
       { id: 'discord', title: 'DISCORD', pre: 'dc', accent: '#7c83f5',
-        // HONESTY: server/channel messages need a chat allowlist no production path supplies yet — DMs only today.
-        tagline: 'DM your Discord bot to talk to your agent. Server channels are not supported yet.',
+        // Server channels: the gateway subscribes to GUILD_MESSAGES; a channel stays closed until the owner sends /allow in it.
+        tagline: 'DM your Discord bot to talk to your agent, or @mention it in a server channel you have opened with /allow.',
         verb: 'receiving',
         steps: [
           'Open the <b>Discord Developer Portal</b> → <b>New Application</b> → <b>Bot</b> → <b>Reset Token</b> → copy the token.',
           'Invite the bot to a server you are in (OAuth2 → URL Generator → tick <code>bot</code> → open the link). Discord only lets you DM a bot you share a server with. No intents need turning on.',
           'Paste the token below and connect.',
-          '<b>Pair your account.</b> Open a <b>direct message</b> with the bot (click it in the server member list → Message) and send the <code>pair</code> message StarNet shows, exactly as shown. Messages in server channels are ignored. Until you pair, the bot refuses every message.'
+          '<b>Pair your account.</b> Open a <b>direct message</b> with the bot (click it in the server member list → Message) and send the <code>pair</code> message StarNet shows, exactly as shown. Until you pair, the bot refuses every message.',
+          '<b>Optional: open a server channel.</b> In the channel, send <code>@YourBot /allow</code>. After that the bot answers messages there that @mention it. <code>@YourBot /deny</code> closes it again. (Bots only see channel text that mentions them unless you enable Message Content Intent in the portal.)'
         ],
         note: 'Your token is saved on this machine and never displayed.',
         fieldsHtml: '<label class="ch-lbl" for="dc-token">BOT TOKEN <span class="dim">— from the Discord Developer Portal</span></label>' +
