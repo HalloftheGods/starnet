@@ -92,6 +92,22 @@
     return { admitted, revoked };
   }
 
+  /* ownerTrusted(msg, owner, commandChannelIds) -> boolean
+     OWNER PARITY on Discord (the Telegram hubs' ownerTrusted rule, widened by one operator decision). The paired owner
+     gets the same office as at the station (workbench, connectors, crew dispatch, Full Power, no consent stall) when:
+       - they write to the bot in a DM, exactly like Telegram; or
+       - they write in a server channel the OPERATOR listed in the bot's CHANNEL IDS. Listing a channel is a deliberate
+         "this is my command room" act made at the station, not something a chat member can do from Discord.
+     Everyone else, and the owner in any other server channel, stays an ordinary channel caller. The owner id comes from
+     the adapter's pairing claim (never message text); unpaired means nobody is trusted (fail closed). */
+  function ownerTrusted(msg, owner, commandChannelIds) {
+    const own = String(owner == null ? '' : owner);
+    if (!own || !msg || String(msg.userId == null ? '' : msg.userId) !== own) return false;
+    if (String(msg.chatType || '') === 'dm') return true;
+    const ids = Array.isArray(commandChannelIds) ? commandChannelIds.map(String) : [];
+    return ids.indexOf(String(msg.chatId == null ? '' : msg.chatId)) >= 0;
+  }
+
   function makeDiscordAdapter(opts) {
     const o = opts || {};
     const transport = o.transport || makeDiscordTransport({
@@ -118,5 +134,5 @@
     });
   }
 
-  return { makeDiscordAdapter, normalize, parseChannelIds, applyChannelAdmission, MAX_MESSAGE_LENGTH };
+  return { makeDiscordAdapter, normalize, parseChannelIds, applyChannelAdmission, ownerTrusted, MAX_MESSAGE_LENGTH };
 });

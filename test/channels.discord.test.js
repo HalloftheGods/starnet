@@ -5,7 +5,7 @@
    WebSocket gateway is injected (a fake here), so this is deterministic and touches no real network. */
 'use strict';
 const A = require('./_assert.js');
-const { makeDiscordAdapter, normalize, parseChannelIds, applyChannelAdmission, MAX_MESSAGE_LENGTH } = require('../sidecar/channels/discord.js');
+const { makeDiscordAdapter, normalize, parseChannelIds, applyChannelAdmission, ownerTrusted, MAX_MESSAGE_LENGTH } = require('../sidecar/channels/discord.js');
 const { makeDiscordTransport } = require('../sidecar/channels/discord.transport.js');
 
 const tick = () => new Promise(r => setTimeout(r, 0));
@@ -183,5 +183,16 @@ function resp(status, body, headers) {
   A.eq(recs.get(ID2).admittedOn, '', 'withdrawn record is closed');
   A.eq(recs.get('666').admittedOn, 'telegram', 'another platform\'s admission is never touched');
   A.eq(applyChannelAdmission(null, [ID1], []), { admitted: [], revoked: [] }, 'no store -> no-op, no throw');
+
+  // ── OWNER PARITY: ownerTrusted(msg, owner, commandChannelIds) ──
+  const OWN = '327857344212107264', CMD = '143034216174400313', OTHER = '143034216174400999';
+  A.eq(ownerTrusted({ userId: OWN, chatType: 'dm', chatId: 'd1' }, OWN, []), true, 'owner DM is trusted (Telegram parity)');
+  A.eq(ownerTrusted({ userId: OWN, chatType: 'group', chatId: CMD }, OWN, [CMD]), true, 'owner in an operator-listed command channel is trusted');
+  A.eq(ownerTrusted({ userId: OWN, chatType: 'group', chatId: OTHER }, OWN, [CMD]), false, 'owner in an unlisted server channel is NOT trusted');
+  A.eq(ownerTrusted({ userId: '999', chatType: 'group', chatId: CMD }, OWN, [CMD]), false, 'a teammate in the command channel is NOT trusted');
+  A.eq(ownerTrusted({ userId: '999', chatType: 'dm', chatId: 'd2' }, OWN, [CMD]), false, 'a stranger DM is NOT trusted');
+  A.eq(ownerTrusted({ userId: OWN, chatType: 'dm', chatId: 'd1' }, '', [CMD]), false, 'unpaired bot trusts nobody (fail closed)');
+  A.eq(ownerTrusted(null, OWN, [CMD]), false, 'no message -> false, no throw');
+  A.eq(ownerTrusted({ userId: OWN, chatType: 'group', chatId: CMD }, OWN, null), false, 'no channel list -> server channels untrusted');
 
 })();

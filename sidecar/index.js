@@ -287,7 +287,7 @@ const { parseSlackTokens } = require('./channels/slack.js');                    
 const engineCredential = require('./engine-credential.js');                      // #89: the page's provider key, kept for unattended runs + the ONE no-credential sentence
 const channelSecretsMod = require('./channels/secrets.js');                        // T1.4: token-vs-config split + keychain migration
 const { makeConnectGateway } = require('./channels/discord.gateway.js');
-const { parseChannelIds: parseDiscordChannelIds, applyChannelAdmission: applyDiscordChannelAdmission } = require('./channels/discord.js');           // P2-E: the real Discord gateway WS client (inbound)
+const { parseChannelIds: parseDiscordChannelIds, applyChannelAdmission: applyDiscordChannelAdmission, ownerTrusted: discordOwnerTrusted } = require('./channels/discord.js');           // P2-E: the real Discord gateway WS client (inbound)
 const { makeSseHub, runTeeView } = require('./channels/sse.js');
 const { makeRunStreams, runStreamOf } = require('./run-streams.js');   // ONE stream per page for every run it watches (2026-10-21)
 const { makeHandoffHost } = require('./browser-handoff.js');   // STEP-IN: the agent hands its live browser to the Commander
@@ -11206,6 +11206,14 @@ function startDiscord(token, key, model, agentCfg) {
         return { key: k, model: d.model, provider, baseUrl, configured: providerHasCredential(provider, k, baseUrl), error: expiredSignInNote(provider), reasoningEffort: resolveReasoningEffort(provider, d.reasoningEffort), agentId: d.agentId, system: d.system };
       },
       persona: DISCORD_PERSONA, classify: Classify.isTaskDirective, redact: redact, emit: chanEmit,
+      // OWNER PARITY: the paired owner in a DM, or in an operator-listed CHANNEL IDS room, runs with the station office
+      // (workbench/chemx, crew dispatch, Full Power) — without this every Discord run was an unattended stranger's run.
+      // Read live so a CHANNEL IDS edit or a re-pair applies to the next message. See channels/discord.js ownerTrusted.
+      ownerTrusted: (msg) => {
+        const own = (wired && wired.adapter && wired.adapter._internals) ? wired.adapter._internals.owner : '';
+        const ids = (channelSecrets && channelSecrets.discord && channelSecrets.discord.channelIds) || [];
+        return discordOwnerTrusted(msg, own, ids);
+      },
       // a message routed to another agent (a line-bound channel) runs as THAT agent, never in the configured one's prompt
       systemFor: (agentId) => (agentRoster.has(String(agentId || '')) ? cronSystemFor(String(agentId)) : ''),
       // every downstream dock runs on ITS OWN roster provider/model/credential (the Telegram bot seam's rule) — without it
