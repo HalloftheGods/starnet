@@ -896,6 +896,13 @@ function makeChainRunner(o) {
       // MODEL TIER: a stage that ended with `MODEL: haiku|sonnet|opus` sizes the step it hands to (never a loop's reviewer
       // output — the work going back to the same dock keeps the tier its triage named)
       if (!entryBranch && !loopHop) { const tier = ModelTier.parseModelTier(lastStageText); if (tier) routedTier = { key: nodeKey(target), tier }; }
+      // ESCALATION (2026-11-10): a reviewer sending work back may RAISE the tier (never lower it) with its own `MODEL:` line,
+      // so cheap work that came back short is retried on a bigger model. With no tier routed yet, only `opus` escalates.
+      else if (!entryBranch && loopHop) {
+        const up = ModelTier.parseModelTier(lastStageText), k = nodeKey(target);
+        const cur0 = routedTier && routedTier.key === k ? routedTier.tier : null;
+        if (up && (cur0 ? ModelTier.tierRank(up) > ModelTier.tierRank(cur0) : up === 'opus')) routedTier = { key: k, tier: up };
+      }
       if (routedTier && routedTier.key === nodeKey(target)) call.modelTier = routedTier.tier;
       // what is LEFT of the line's $ ceiling rides the hop as a lower-only cap: the pre-hop check alone let one own-key stage
       // spend far past the line's limit ("within one hop's spend" — QA 2026-10-02)

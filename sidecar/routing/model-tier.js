@@ -53,4 +53,7 @@ function tierBrief() {
     + 'MODEL: sonnet (ordinary work: drafting, research, routine code) or MODEL: opus (hard work: architecture, tricky debugging, strategy, anything high-stakes). Pick the cheapest that will do it well.';
 }
 
-module.exports = { TIERS, parseModelTier, applyTier, tierBrief };
+/* tierRank(tier) -> 0 haiku, 1 sonnet, 2 opus, -1 unknown: lets a reviewer escalate a tier but never lower it. */
+function tierRank(tier) { return TIERS.indexOf(String(tier || '').toLowerCase()); }
+
+module.exports = { TIERS, parseModelTier, applyTier, tierBrief, tierRank };
