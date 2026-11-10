@@ -59,6 +59,13 @@ function fakeFetch() { return async () => ({ ok: true, status: 200, async json()
   A.ok(/connectGateway:\s*makeConnectGateway\(/.test(startBody), 'startDiscord injects a real connectGateway (full-duplex ingress)');
   A.ok(/onState:/.test(startBody), 'the gateway reports transport health into discordStatus (truthful status line)');
 
+  // CHANNEL IDS: startDiscord pre-admits the configured channels; the connect route validates and persists them
+  A.ok(/applyDiscordChannelAdmission\(channelStore,/.test(startBody), 'startDiscord pre-admits the configured channel IDs (same record /allow writes)');
+  const dcConnectBody = (idx.split('async function handleDiscordConnect')[1] || '').split('async function ')[0];
+  A.ok(/parseDiscordChannelIds\(body\.channelIds\)/.test(dcConnectBody) && /channel IDs must be numbers/.test(dcConnectBody), 'connect validates channelIds (non-numeric refused)');
+  A.ok(/channelIds\b/.test(dcStatusBodyEarly()), 'status exposes the saved channel IDs for prefill');
+  function dcStatusBodyEarly() { return (idx.split('function handleDiscordStatus')[1] || '').split('\nfunction ')[0]; }
+
   // SECRET-SAFETY: the status handler reports only booleans/state — never the token/key. Guard the shape.
   const dcStatusBody = (idx.split('function handleDiscordStatus')[1] || '').split('function ')[0];
   // `configured` is a boolean derived from the resolved token (keychain/runtime on desktop, plaintext record in
@@ -98,6 +105,11 @@ function fakeFetch() { return async () => ({ ok: true, status: 200, async json()
   A.ok(/DM your Discord bot to talk to your agent/.test(station), 'the Discord card now advertises two-way chat (truthful full-duplex)');
   // the status line reflects that receive works when connected (generic '● CONNECTED — <verb>' + discord's verb).
   A.ok(/CONNECTED — ' \+ c\.verb/.test(station) && /verb: 'receiving'/.test(station), 'the connected status says it is receiving (not just sending)');
+
+  // CHANNEL IDS field: input under the token, sent on connect, prefilled from status; copy covers permissions + intent
+  A.ok(/id="dc-channel-ids"[^>]*type="text"/.test(station), 'Discord card has an optional CHANNEL IDS text input');
+  A.ok(/payload\.channelIds = vals\.channelIds/.test(station), 'connect sends the channel IDs');
+  A.ok(/View Channel/.test(station) && /Send Messages/.test(station) && /Message Content Intent/.test(station), 'card copy names the channel permissions and the Message Content Intent caveat');
 
   // keep-saved-when-blank contract (reconnect without re-pasting), same as Telegram
   A.ok(/paste your Discord bot token first/.test(station), 'first-time setup requires a token; a saved token allows blank reconnect');

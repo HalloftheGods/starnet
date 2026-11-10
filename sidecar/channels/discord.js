@@ -53,6 +53,45 @@
     };
   }
 
+  /* parseChannelIds(input) -> { ids, rejected }
+     The operator-configured server channels (comma/space/newline separated string, or an array). Discord channel ids
+     are snowflakes: all digits. Each entry is trimmed, duplicates are dropped (first wins, order kept), and anything
+     that is not a 15-25 digit number lands in `rejected` rather than being silently kept. */
+  function parseChannelIds(input) {
+    const parts = Array.isArray(input) ? input : String(input == null ? '' : input).split(/[\s,;]+/);
+    const ids = [], rejected = [], seen = new Set();
+    for (const raw of parts) {
+      const t = String(raw == null ? '' : raw).trim();
+      if (!t) continue;
+      if (!/^\d{15,25}$/.test(t)) { rejected.push(t); continue; }
+      if (seen.has(t)) continue;
+      seen.add(t); ids.push(t);
+    }
+    return { ids, rejected };
+  }
+
+  /* applyChannelAdmission(store, ids, prevIds) -> { admitted, revoked }
+     Pre-admits the configured channels exactly as the owner's /allow would: the chat record gets admittedOn:'discord'
+     (what hub.chatAdmitted reads) plus channel/chatId, which also makes the channel a known target for channel.send.
+     A channel dropped from the config since last time (prevIds) has its admission withdrawn, but only if THIS
+     platform granted it. Owner pairing is untouched: admission opens a room, it never makes anyone the owner. */
+  function applyChannelAdmission(store, ids, prevIds) {
+    const admitted = [], revoked = [];
+    if (!store || typeof store.saveChatRecord !== 'function') return { admitted, revoked };
+    const want = new Set(ids || []);
+    for (const id of ids || []) {
+      try { store.saveChatRecord(id, { channel: 'discord', chatId: id, admittedOn: 'discord' }); admitted.push(id); } catch (_) {}
+    }
+    for (const id of prevIds || []) {
+      if (want.has(id)) continue;
+      try {
+        const r = typeof store.getChatRecord === 'function' ? store.getChatRecord(id) : null;
+        if (r && r.admittedOn === 'discord') { store.saveChatRecord(id, { admittedOn: '' }); revoked.push(id); }
+      } catch (_) {}
+    }
+    return { admitted, revoked };
+  }
+
   function makeDiscordAdapter(opts) {
     const o = opts || {};
     const transport = o.transport || makeDiscordTransport({
@@ -79,5 +118,5 @@
     });
   }
 
-  return { makeDiscordAdapter, normalize, MAX_MESSAGE_LENGTH };
+  return { makeDiscordAdapter, normalize, parseChannelIds, applyChannelAdmission, MAX_MESSAGE_LENGTH };
 });

@@ -5,7 +5,7 @@
    WebSocket gateway is injected (a fake here), so this is deterministic and touches no real network. */
 'use strict';
 const A = require('./_assert.js');
-const { makeDiscordAdapter, normalize, MAX_MESSAGE_LENGTH } = require('../sidecar/channels/discord.js');
+const { makeDiscordAdapter, normalize, parseChannelIds, applyChannelAdmission, MAX_MESSAGE_LENGTH } = require('../sidecar/channels/discord.js');
 const { makeDiscordTransport } = require('../sidecar/channels/discord.transport.js');
 
 const tick = () => new Promise(r => setTimeout(r, 0));
@@ -116,6 +116,27 @@ function resp(status, body, headers) {
     await a.disconnect();
   }
 
+  // ---- E. pre-admitted channels: the adapter's allow-list read (what hub.chatAdmitted gives) opens ONLY listed server channels ----
+  {
+    const ID1 = '1430342161744003132';
+    const recs = new Map([[ID1, { admittedOn: 'discord', channel: 'discord', chatId: ID1 }]]);
+    const inbox = [];
+    const connectGateway = ({ onMessage }) => {
+      onMessage({ id: '980', channel_id: ID1, guild_id: 'G', content: 'in listed', author: { id: 'owner', username: 'o' } });
+      onMessage({ id: '981', channel_id: '1430342161744009999', guild_id: 'G', content: 'in unlisted', author: { id: 'owner', username: 'o' } });
+      return { close() {} };
+    };
+    const transport = makeDiscordTransport({ fetch: fakeFetch(() => resp(200, { id: '1' })), token: 'T', connectGateway, parkMs: 1, sleep: () => Promise.resolve() });
+    const a = makeDiscordAdapter({
+      transport, ownerUserId: 'owner', onInbound: m => inbox.push(m), clock: { now: () => 1 }, dropPendingOnConnect: false,
+      allowedChats: (c) => { const r = recs.get(String(c)); return !!(r && r.admittedOn === 'discord'); }
+    });
+    await a.connect();
+    for (let i = 0; i < 30 && !inbox.length; i++) await tick();
+    A.eq(inbox.map(m => m.text), ['in listed'], 'a message in a pre-admitted channel is delivered; an unlisted server channel stays closed');
+    await a.disconnect();
+  }
+
   A.report('channels.discord.test');
 })().catch(e => { console.error(e); process.exit(1); });
 
@@ -132,4 +153,35 @@ function resp(status, body, headers) {
   A.eq(r3.message.text, '<@555> hi', 'a human mention is left alone');
   const r4 = normalize({ id: '4', channel_id: 'C1', guild_id: 'G1', author: { id: 'u1' }, content: '<@999>', mentions: [bot] });
   A.eq(r4.message, null, 'a bare mention with no text delivers nothing');
+})();
+
+// ---- configured server channels (CHANNEL IDS): parsing + pre-admission ----
+(function channelIdConfig() {
+  const ID1 = '1430342161744003132', ID2 = '1430342161744003133';
+  A.eq(parseChannelIds(' ' + ID1 + ' ,' + ID2 + ' '), { ids: [ID1, ID2], rejected: [] }, 'ids are trimmed and split on commas');
+  A.eq(parseChannelIds(ID1 + ',' + ID1 + ',' + ID2 + ',' + ID1), { ids: [ID1, ID2], rejected: [] }, 'duplicates are dropped, first order kept');
+  A.eq(parseChannelIds(ID1 + ' ' + ID2).ids, [ID1, ID2], 'whitespace also separates');
+  const bad = parseChannelIds(ID1 + ',general,#chat,12ab,<#' + ID2 + '>,123');
+  A.eq(bad.ids, [ID1], 'only numeric snowflakes are kept');
+  A.eq(bad.rejected, ['general', '#chat', '12ab', '<#' + ID2 + '>', '123'], 'non-numeric / too-short entries are reported, not silently kept');
+  A.eq(parseChannelIds(''), { ids: [], rejected: [] }, 'empty -> none');
+  A.eq(parseChannelIds(null), { ids: [], rejected: [] }, 'null -> none');
+  A.eq(parseChannelIds([' ' + ID1, ID1, 'x']), { ids: [ID1], rejected: ['x'] }, 'an array is parsed the same way');
+
+  const recs = new Map();
+  const store = {
+    getChatRecord: (c) => recs.get(String(c)),
+    saveChatRecord: (c, patch) => { const m = Object.assign({}, recs.get(String(c)), patch); recs.set(String(c), m); return m; }
+  };
+  const r1 = applyChannelAdmission(store, [ID1, ID2], []);
+  A.eq(r1.admitted, [ID1, ID2], 'every configured channel is admitted');
+  A.eq([recs.get(ID1).admittedOn, recs.get(ID1).channel, recs.get(ID1).chatId], ['discord', 'discord', ID1], 'the record carries admittedOn + channel + chatId (admitted, and a known channel.send target)');
+  recs.set('555', { admittedOn: 'discord', channel: 'discord', chatId: '555' });   // a channel the owner opened with /allow
+  recs.set('666', { admittedOn: 'telegram', channel: 'telegram', chatId: '666' });
+  const r2 = applyChannelAdmission(store, [ID1], [ID1, ID2, '555', '666']);
+  A.eq(r2.revoked.sort(), ['555', ID2].sort(), 'a channel dropped from the config is withdrawn');
+  A.eq(recs.get(ID2).admittedOn, '', 'withdrawn record is closed');
+  A.eq(recs.get('666').admittedOn, 'telegram', 'another platform\'s admission is never touched');
+  A.eq(applyChannelAdmission(null, [ID1], []), { admitted: [], revoked: [] }, 'no store -> no-op, no throw');
+
 })();

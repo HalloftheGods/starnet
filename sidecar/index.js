@@ -286,7 +286,8 @@ const { makeChannelReach } = require('./channels/reach.js');   // the ONE "can a
 const { parseSlackTokens } = require('./channels/slack.js');                       // slack stores its two tokens as ONE secret string
 const engineCredential = require('./engine-credential.js');                      // #89: the page's provider key, kept for unattended runs + the ONE no-credential sentence
 const channelSecretsMod = require('./channels/secrets.js');                        // T1.4: token-vs-config split + keychain migration
-const { makeConnectGateway } = require('./channels/discord.gateway.js');           // P2-E: the real Discord gateway WS client (inbound)
+const { makeConnectGateway } = require('./channels/discord.gateway.js');
+const { parseChannelIds: parseDiscordChannelIds, applyChannelAdmission: applyDiscordChannelAdmission } = require('./channels/discord.js');           // P2-E: the real Discord gateway WS client (inbound)
 const { makeSseHub, runTeeView } = require('./channels/sse.js');
 const { makeRunStreams, runStreamOf } = require('./run-streams.js');   // ONE stream per page for every run it watches (2026-10-21)
 const { makeHandoffHost } = require('./browser-handoff.js');   // STEP-IN: the agent hands its live browser to the Commander
@@ -11181,12 +11182,16 @@ function startDiscord(token, key, model, agentCfg) {
   const reasoningEffort = resolveReasoningEffort(provider, cfg.reasoningEffort);
   if (token) channelTokenRuntime.discord = String(token);   // keep the live token off the plaintext file (desktop) — see startTelegram
   const prev = (channelSecrets && channelSecrets.discord) || {};
+  const discordChannelIds = Array.isArray(cfg.channelIds) ? cfg.channelIds : (Array.isArray(prev.channelIds) ? prev.channelIds : []);
   channelSecrets = Object.assign({}, channelSecrets, { discord: {
     token: token, key: key, model: model, provider: provider, baseUrl: cfg.baseUrl || cfg.base_url || '', reasoningEffort: reasoningEffort, enabled: true,
     agentId: cfg.agentId || undefined, system: cfg.system || undefined, name: cfg.name || undefined,
-    ownerId: cfg.ownerId || prev.ownerId || undefined
+    ownerId: cfg.ownerId || prev.ownerId || undefined,
+    channelIds: discordChannelIds.length ? discordChannelIds : undefined
   } });
   const secretsPersisted = saveChannelSecrets(channelSecrets);   // read-back-proven; surfaced by the connect route
+  // Operator-listed server channels are pre-admitted like an owner /allow (and become channel.send targets).
+  try { applyDiscordChannelAdmission(channelStore, channelSecrets.discord.channelIds || [], Array.isArray(prev.channelIds) ? prev.channelIds : []); } catch (_) {}
   const wired = wireChannel(channelRegistry.get('discord'), {
     hub: {
       runOnce: runOnce, store: channelStore, steerRun: channelSteerRun,
@@ -26791,10 +26796,17 @@ async function handleDiscordConnect(req, res) {
   const agentId = String(body.agentId || '').trim() || String(saved.agentId || '');
   const system = (typeof body.system === 'string' && body.system) ? body.system : String(saved.system || '');
   const name = String(body.agentName || '').trim() || String(saved.name || '');
+  // CHANNEL IDS (optional): absent = keep what is saved; a string/array (even empty) replaces it. Non-numeric entries are refused.
+  let channelIds = Array.isArray(saved.channelIds) ? saved.channelIds : [];
+  if (body.channelIds !== undefined && body.channelIds !== null) {
+    const parsedIds = parseDiscordChannelIds(body.channelIds);
+    if (parsedIds.rejected.length) return json(400, { error: 'channel IDs must be numbers (right-click the channel → Copy Channel ID) — not valid: ' + parsedIds.rejected.slice(0, 3).join(', ') });
+    channelIds = parsedIds.ids;
+  }
   if (!token) return json(400, { error: 'missing bot token — create a bot in the Discord Developer Portal and paste its token here' });
   if (!model) return json(400, { error: 'connect your agent first — choose a model in Settings → Providers' });
   if (!providerHasCredential(provider, key, baseUrl)) return json(400, { error: providerCredentialError(provider) });
-  let started; try { started = startDiscord(token, providerUsesCodex(provider) ? '' : key, model, { agentId, system, name, provider, reasoningEffort, baseUrl }); } catch (e) { return json(500, { error: (e && e.message) || 'failed to start' }); }
+  let started; try { started = startDiscord(token, providerUsesCodex(provider) ? '' : key, model, { agentId, system, name, provider, reasoningEffort, baseUrl, channelIds }); } catch (e) { return json(500, { error: (e && e.message) || 'failed to start' }); }
   // report the REAL post-start status ('connecting' until the gateway reaches READY) — the panel repaints from /status.
   json(200, withOwnerPairing('discord', { connected: !!discordStatus.connected, state: discordStatus.state, persisted: !!(started && started.secretsPersisted) }));
 }
@@ -26837,7 +26849,7 @@ function handleDiscordStatus(req, res) {
   const durable = configured && (isChannelTokenDurable('discord') || !!d.token);   // keychain/env OR plaintext-on-disk (see telegram)
   res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   // `ownerLocked` proves a saved Discord owner survived restart without disclosing who that owner is.
-  res.end(JSON.stringify({ connected: discordStatus.connected, configured: configured, durable: durable, state: discordStatus.state, detail: discordStatus.detail || '', notifyAutonomous: !!(channelSecrets && channelSecrets.notifyAutonomous), ownerLocked: !!d.ownerId }));
+  res.end(JSON.stringify({ connected: discordStatus.connected, configured: configured, durable: durable, state: discordStatus.state, detail: discordStatus.detail || '', notifyAutonomous: !!(channelSecrets && channelSecrets.notifyAutonomous), ownerLocked: !!d.ownerId, channelIds: (d.channelIds || []).join(', ') }));
 }
 
 // POST /api/channels/notify { on } — the GLOBAL opt-in (default off): ping a connected channel when an AUTONOMOUS
@@ -26913,6 +26925,7 @@ function channelStatusPayload(id) {
     // Commander can see which agent a DM will reach. Empty until a config is saved.
     agentName: String(rec.name || '')
   };
+  if (id === 'discord') out.channelIds = (Array.isArray(rec.channelIds) ? rec.channelIds : []).join(', ');
   // endpoint/account are NON-secret connection config (a homeserver URL / a signal-cli URL + number) — surfacing
   // them lets the panel prefill its fields for a one-click reconnect. Tokens/keys stay server-side, always.
   if (id === 'matrix' || id === 'signal') { out.endpoint = String(rec.endpoint || ''); }
